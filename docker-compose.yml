@@ -1,0 +1,18 @@
+services:
+  redis:
+    image: redis/redis-stack:latest
+    container_name: redis-stack
+    ports:
+      - "6379:6379"
+      - "8001:8001"
+    networks:
+      redis-network:
+        ipv4_address: 192.168.1.10
+    restart: always
+
+networks:
+  redis-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.1.0/24
