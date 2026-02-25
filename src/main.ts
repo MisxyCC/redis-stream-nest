@@ -3,26 +3,32 @@ import {
   FastifyAdapter,
   NestFastifyApplication,
 } from '@nestjs/platform-fastify';
+import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  // สร้าง instance โดยระบุให้ใช้ FastifyAdapter
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    new FastifyAdapter({ logger: false }), // สามารถเปิด logger ของ Fastify ได้ถ้าต้องการดู Log ระดับ HTTP แบบละเอียด
+    new FastifyAdapter({ logger: false }),
   );
 
-  // เปิด CORS เพื่อให้ Frontend (Vue) เรียก API ได้
   app.enableCors({
     origin: '*',
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
   });
 
-  // ข้อควรระวัง: Fastify ต้องระบุ Host เป็น '0.0.0.0' เพื่อให้สามารถรับ Request จากภายนอก (เช่น Docker หรือ Frontend คนละ Port) ได้
+  // บังคับใช้ Validation กับทุก Request ที่มี DTO
+  // whitelist: true คือการปัดทิ้งฟิลด์ขยะที่ไม่ได้อยู่ใน DTO อัตโนมัติ
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }),
+  );
+
   await app.listen(3000, '0.0.0.0');
-  console.log(`NestJS (Fastify) is running on: ${await app.getUrl()}`);
+  console.log(`Backend is running at ${await app.getUrl()}`);
 }
 bootstrap().catch((err) => {
   console.error(err);
-  process.exit(1);
 });
