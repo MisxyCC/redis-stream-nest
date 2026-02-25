@@ -191,7 +191,7 @@ export class WorkflowService implements OnModuleInit, OnModuleDestroy {
 
     try {
       await this.redis.xack(this.streamKey, this.groupName, messageId);
-      this.logger.log(`Acknowledged: ${messageId} (${payload.event})`);
+      this.logger.log(`Acknowledged: ${messageId} ${payload.docId} (${payload.event})`);
     } catch (error: unknown) {
       this.logger.error(
         `Failed to process: ${messageId}`,

@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Sse } from '@nestjs/common';
+import { Controller, Post, Body, Sse, Get } from '@nestjs/common';
 import { WorkflowService } from './workflow.service';
 import { SubmitDocumentDto, ApproveDocumentDto } from './workflow.dto';
 import { WorkflowActionResponse, KanbanBoard } from './workflow.types';
@@ -27,6 +27,10 @@ export class WorkflowController {
     @Body() dto: ApproveDocumentDto,
   ): Promise<WorkflowActionResponse> {
     return this.workflowService.approveDocument(dto.docId, dto.approverId);
+  }
+  @Get('status')
+  async getStatus(): Promise<KanbanBoard> {
+    return this.workflowService.getKanbanStatus();
   }
 
   @Sse('status-stream')
