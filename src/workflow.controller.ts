@@ -1,5 +1,7 @@
-import { Controller, Post, Body, Get } from '@nestjs/common';
+import { Controller, Post, Body, Sse } from '@nestjs/common';
 import { WorkflowService } from './workflow.service';
+import { Observable, interval } from 'rxjs';
+import { switchMap } from 'rxjs/operators';
 
 @Controller('workflow')
 export class WorkflowController {
@@ -27,8 +29,17 @@ export class WorkflowController {
     return this.workflowService.approveDocument(body.docId, body.approverId);
   }
 
-  @Get('status')
-  async getStatus() {
-    return this.workflowService.getKanbanStatus();
+  @Sse('status-stream')
+  statusStream(): Observable<MessageEvent> {
+    // interval(1000) คือการให้ Server ทำงานทุกๆ 1 วินาที
+    return interval(1000).pipe(
+      switchMap(async () => {
+        // ดึงข้อมูลสถานะล่าสุดจาก Redis
+        const data = await this.workflowService.getKanbanStatus();
+
+        // ส่งกลับไปในรูปแบบ MessageEvent ของ SSE
+        return { data } as MessageEvent;
+      }),
+    );
   }
 }
