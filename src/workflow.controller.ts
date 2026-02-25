@@ -1,4 +1,4 @@
-import { Controller, Post, Body } from '@nestjs/common';
+import { Controller, Post, Body, Get } from '@nestjs/common';
 import { WorkflowService } from './workflow.service';
 
 @Controller('workflow')
@@ -25,5 +25,10 @@ export class WorkflowController {
       };
     }
     return this.workflowService.approveDocument(body.docId, body.approverId);
+  }
+
+  @Get('status')
+  async getStatus() {
+    return this.workflowService.getKanbanStatus();
   }
 }

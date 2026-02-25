@@ -22,4 +22,7 @@ async function bootstrap() {
   await app.listen(3000, '0.0.0.0');
   console.log(`NestJS (Fastify) is running on: ${await app.getUrl()}`);
 }
-bootstrap();
+bootstrap().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

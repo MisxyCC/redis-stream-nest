@@ -6,6 +6,8 @@ import {
 } from '@nestjs/common';
 import Redis from 'ioredis';
 
+type RedisStreamMessage = [string, string[]];
+
 @Injectable()
 export class WorkflowService implements OnModuleInit, OnModuleDestroy {
   private readonly redis: Redis;
@@ -25,7 +27,7 @@ export class WorkflowService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     await this.initConsumerGroup();
-    this.startListening();
+    void this.startListening();
     this.startRecoveryLoop();
   }
 
@@ -46,8 +48,10 @@ export class WorkflowService implements OnModuleInit, OnModuleDestroy {
         'MKSTREAM',
       );
       this.logger.log(`Consumer group '${this.groupName}' initialized.`);
-    } catch (error: any) {
-      if (!error.message.includes('BUSYGROUP')) throw error;
+    } catch (error: unknown) {
+      if (error instanceof Error && !error.message.includes('BUSYGROUP')) {
+        throw error;
+      }
     }
   }
 
@@ -100,7 +104,7 @@ export class WorkflowService implements OnModuleInit, OnModuleDestroy {
   private async startListening() {
     while (!this.isShuttingDown) {
       try {
-        const results = await this.redis.xreadgroup(
+        const results = (await this.redis.xreadgroup(
           'GROUP',
           this.groupName,
           this.consumerName,
@@ -109,10 +113,9 @@ export class WorkflowService implements OnModuleInit, OnModuleDestroy {
           'STREAMS',
           this.streamKey,
           '>',
-        );
-
+        )) as [string, RedisStreamMessage[]][] | null;
         if (results && results.length > 0) {
-          const streamMessages = (results[0] as any)[1] as any[];
+          const streamMessages = results[0][1];
           for (const message of streamMessages) {
             await this.processAndAckMessage(message);
           }
@@ -127,15 +130,17 @@ export class WorkflowService implements OnModuleInit, OnModuleDestroy {
   }
 
   private startRecoveryLoop() {
-    this.recoveryInterval = setInterval(async () => {
+    this.recoveryInterval = setInterval(() => {
       if (this.isShuttingDown) return;
-      await this.recoverStuckMessages();
+      void this.recoverStuckMessages().catch((error) => {
+        this.logger.error('Error during message recovery loop:', error);
+      });
     }, 60000);
   }
 
   private async recoverStuckMessages() {
     try {
-      const result = await this.redis.xautoclaim(
+      const result = (await this.redis.xautoclaim(
         this.streamKey,
         this.groupName,
         this.consumerName,
@@ -143,8 +148,8 @@ export class WorkflowService implements OnModuleInit, OnModuleDestroy {
         '0-0',
         'COUNT',
         50,
-      );
-      const claimedMessages = result[1] as any[];
+      )) as [string, RedisStreamMessage[]];
+      const claimedMessages = result[1];
       if (claimedMessages && claimedMessages.length > 0) {
         this.logger.warn(
           `Recovered ${claimedMessages.length} stuck messages. Reprocessing...`,
@@ -158,9 +163,12 @@ export class WorkflowService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async processAndAckMessage(message: any) {
+  private async processAndAckMessage(message: RedisStreamMessage) {
     const [messageId, fields] = message;
     const payload: Record<string, string> = {};
+    //แกล้งถ่วงเวลา Worker 3 วินาที เพื่อให้มองเห็นการ์ดในสถานะ Processing บนหน้าเว็บ
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+
     for (let i = 0; i < fields.length; i += 2)
       payload[fields[i]] = fields[i + 1];
 
@@ -180,5 +188,83 @@ export class WorkflowService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       this.logger.error(`Failed to process message ${messageId}:`, error);
     }
+  }
+
+  async getKanbanStatus() {
+    const kanban: {
+      waiting: Record<string, unknown>[];
+      processing: Record<string, unknown>[];
+      completed: Record<string, unknown>[];
+    } = {
+      waiting: [],
+      processing: [],
+      completed: [],
+    };
+    try {
+      // 1. ดึงข้อความทั้งหมดใน Stream (ดึงมาแค่ 50 รายการล่าสุดเพื่อประสิทธิภาพ)
+      const messages = await this.redis.xrange(
+        this.streamKey,
+        '+',
+        '-',
+        'COUNT',
+        50,
+      );
+      // 2. หาว่าข้อความล่าสุดที่ Group นี้อ่านไปแล้วคือ ID อะไร
+      let lastDeliveredId = '0-0';
+      try {
+        const groupInfo = (await this.redis.xinfo(
+          'GROUPS',
+          this.streamKey,
+        )) as unknown[][];
+        const targetGroup = groupInfo.find((g) => g.includes(this.groupName));
+        if (targetGroup) {
+          const idx = targetGroup.indexOf('last-delivered-id');
+          if (idx !== -1) {
+            lastDeliveredId = targetGroup[idx + 1] as string;
+          }
+        }
+      } catch {
+        // ข้ามไปถ้ายังไม่มี Group
+      }
+      // 3. หาข้อความที่ค้างอยู่ (Pending) ใน Group นี้
+      const pendingIds: Set<string> = new Set<string>();
+      try {
+        const pendingInfo = (await this.redis.xpending(
+          this.streamKey,
+          this.groupName,
+          '-',
+          '+',
+          100,
+        )) as [string, string, number, number][];
+        pendingInfo.forEach((p) => pendingIds.add(p[0]));
+      } catch {
+        // ละเว้น
+      }
+
+      // 4. คัดแยกสถานะ
+      for (const message of messages) {
+        const [id, fields] = message;
+        const payload: Record<string, string> = {};
+        for (let i = 0; i < fields.length; i += 2) {
+          payload[fields[i]] = fields[i + 1];
+        }
+        const card = {
+          id,
+          docId: payload['docId'],
+          event: payload['event'],
+          time: payload['timestamp'],
+        };
+        if (pendingIds.has(id)) {
+          kanban.processing.push(card);
+        } else if (id > lastDeliveredId) {
+          kanban.waiting.push(card);
+        } else {
+          kanban.completed.push(card);
+        }
+      }
+    } catch (error) {
+      this.logger.error('Error fetching Kanban status', error);
+    }
+    return kanban;
   }
 }
